@@ -74,7 +74,7 @@ module SEU_npu_biu(
 // NPU configration register read/write interface  
 //----------------------------------------------------------------------------
     
-    output wire         sys_ren   // ??????????
+    output wire         sys_ren,   // ??????????
     output wire [31:0]  reg_addr, // read/write address 
     output wire [63:0]  reg_wdata,// write data 
     output wire [7:0]   reg_sel,  // write byte select 

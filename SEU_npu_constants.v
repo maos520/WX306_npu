@@ -33,3 +33,11 @@
 `define NPU_CFG_WIDTH  64 // width of configration register 
 `define NPU_CFG_DEPT   8  // deepth of configuration register 
 
+
+//******************************************************************************
+// UI related 
+//******************************************************************************
+  
+`define DDR_AW   32
+`define DDR_DW   64
+

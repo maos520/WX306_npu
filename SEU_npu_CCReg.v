@@ -45,24 +45,25 @@ module SEU_npu_CCReg
 
     //register read/write interface   ------from the SEU_npu_biu module 
     
-    output                      sys_ren,  // ?????                                         
-    output  [`CCR_AW-1:0]       reg_addr, // read/write address 
-    output  [`CCR_DW-1:0]       reg_wdata,  // wreg_wdata,// write data 
-    output  [7:0]               reg_sel,  // write byte select 
-    output                      reg_wen,  // write enable                                        );
-    output                      reg_ren,  // read enable 
-    input   [`CCR_DW-1:0]       reg_rdata,// read data 
-    input                       reg_err,  // error indicator 
-    input                       reg_ack,  // acknowledge signal
+    input                            sys_ren,  // ?????                                         
+    input        [`CCR_AW-1:0]       reg_addr, // read/write address 
+    input        [`CCR_DW-1:0]       reg_wdata,  // wreg_wdata,// write data 
+    input        [7:0]               reg_sel,  // write byte select 
+    input                            reg_wen,  // write enable                         
+    input                            reg_ren,  // read enable 
+    output reg  [`CCR_DW-1:0]        reg_rdata,// read data 
+    output                           reg_err,  // error indicator 
+    output                           reg_ack,  // acknowledge signal
 
    
-    
-    input                       npu_busy_sync,              // from the sync module 
-    input                       first_map_expired_flg_sync, // from the sync module
+   //from mcu  
+    input                       npu_busy,              // indicate the npu is busy 
+    input                       img_expired_flg, // indicate the first map has been handed
    
-    // output the control signals of NN  -------- to the sync moudle 
-    output                      npu_en_processing,  // to the sync module 
-    output                      npu_init_cmplt,     // to the sync module
+    // to mcu 
+    output                      npu_en_processing,  // enable npu 
+    output                      npu_init_cmplt,     // inform npu that configration reg is initiated completedly
+    output                      nn_img_new,   // indicate that the first map has been updated by the host cpmpute 
     
     // output the base para of NN        --------to the SEU_npu_mcu 
     output  [`DDR_AW-1:0]       nn_wt_saddr,        
@@ -70,10 +71,10 @@ module SEU_npu_CCReg
     output  [`DDR_AW-1:0]       nn_map1_saddr,      
     output  [`DDR_AW-1:0]       nn_bn_saddr,        
     output  [`DDR_AW-1:0]       nn_layer_para_saddr,
-    output  [`DDR_AW-1:0]       nn_first_map_saddr, 
+    output  [`DDR_AW-1:0]       nn_img_saddr, 
     output  [7:0]               nn_layers_num      
 );   
-    
+
     
     reg  [`NPU_EN_WIDTH-1:0]    npu_en;
     reg  [`NPU_CFG_WIDTH-1:0]   npu_ctrl;
@@ -96,7 +97,7 @@ module SEU_npu_CCReg
 //
 //------------------------------------------------------------------------
 
-    assign npu_stat[0] = npu_busy_sync;
+    assign npu_stat[0] = npu_busy;
 
 //----------------------------------------------------------------------
 //-----Enable Register  -R/W
@@ -111,7 +112,7 @@ module SEU_npu_CCReg
     always @(posedge clk_trans or negedge rst_n) begin
         if(!rst_n) 
             npu_en <= `NPU_EN_WIDTH'b0;
-        else if(ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (NPU_EN_OS >> 3)) && reg_wen)
+        else if(ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (`NPU_EN_OS >> 3)) && reg_wen)
             npu_en <= reg_wdata[`NPU_EN_WIDTH-1:0];
         else 
             npu_en <= npu_en;
@@ -134,24 +135,25 @@ module SEU_npu_CCReg
     always @(posedge clk_trans or negedge rst_n) begin
         if(!rst_n)
             npu_ctrl[0] <= 1'b0;
-        else if(ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (NPU_CTRL_OS >> 3)) && reg_wen)
+        else if(ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CTRL_OS >> 3)) && reg_wen)
             npu_ctrl[0] <= reg_wdata[0];
         else
-           npu_ctrl <= npu_ctrl; 
+           npu_ctrl[0] <= npu_ctrl[0]; 
     end
 
     always @(posedge clk_trans or negedge rst_n) begin
         if(!rst_n) 
             npu_ctrl[1] <= 1'b0;
-        else if (ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (NPU_CTRL_OS >> 3)) && reg_wen && reg_wdata[1])
+        else if (ccr_sel && (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CTRL_OS >> 3)) && reg_wen && reg_wdata[1])
             npu_ctrl[1] <= 1'b1;
-        else if (first_map_expired_flg_sync)
+        else if (img_expired_flg)
             npu_ctrl[1] <= 1'b0;
         else 
-            npu_ctrl <= npu_ctrl;
+            npu_ctrl[1] <= npu_ctrl[1];
     end
     
-    assign  npu_init_cmplt = npu_ctrl[0];
+    assign npu_init_cmplt = npu_ctrl[0];
+    assign nn_img_new = npu_ctrl[1];
 
 //-----------------------------------------------------------------------
 //--------NN Configuration Register
@@ -161,7 +163,7 @@ module SEU_npu_CCReg
 // This register is split into the following bit fields:
 // 
 // [0][31:0]  -nn_wt_saddr         -- weight start address in DDR
-// [0][55:32] -nn_first_map_saddr  -- first map start address in DDR
+// [0][55:32] -nn_img_saddr  -- first map start address in DDR
 // [0][63:56] -nn_layers_num       -- the number of nn
 // [1][31:0]  -nn_bn_saddr         -- BN store start address in DDR
 // [1][63:32] -nn_layer_para_saddr -- layer parameter start address in DDR
@@ -184,14 +186,14 @@ module SEU_npu_CCReg
         end
         else if (ccr_sel && reg_wen)begin
             case (reg_addr[`CCR_OS_AW-1:3])
-                (NPU_CFG_0_OS >> 3) : npu_cfg_mem[0] <= reg_wdata; 
-                (NPU_CFG_1_OS >> 3) : npu_cfg_mem[1] <= reg_wdata; 
-                (NPU_CFG_2_OS >> 3) : npu_cfg_mem[2] <= reg_wdata; 
-                (NPU_CFG_3_OS >> 3) : npu_cfg_mem[3] <= reg_wdata; 
-                (NPU_CFG_4_OS >> 3) : npu_cfg_mem[4] <= reg_wdata; 
-                (NPU_CFG_5_OS >> 3) : npu_cfg_mem[5] <= reg_wdata; 
-                (NPU_CFG_6_OS >> 3) : npu_cfg_mem[6] <= reg_wdata; 
-                (NPU_CFG_7_OS >> 3) : npu_cfg_mem[7] <= reg_wdata; 
+                (`NPU_CFG_0_OS >> 3) : npu_cfg_mem[0] <= reg_wdata; 
+                (`NPU_CFG_1_OS >> 3) : npu_cfg_mem[1] <= reg_wdata; 
+                (`NPU_CFG_2_OS >> 3) : npu_cfg_mem[2] <= reg_wdata; 
+                (`NPU_CFG_3_OS >> 3) : npu_cfg_mem[3] <= reg_wdata; 
+                (`NPU_CFG_4_OS >> 3) : npu_cfg_mem[4] <= reg_wdata; 
+                (`NPU_CFG_5_OS >> 3) : npu_cfg_mem[5] <= reg_wdata; 
+                (`NPU_CFG_6_OS >> 3) : npu_cfg_mem[6] <= reg_wdata; 
+                (`NPU_CFG_7_OS >> 3) : npu_cfg_mem[7] <= reg_wdata; 
                             default : begin
                                 npu_cfg_mem[0] <= npu_cfg_mem[0];
                                 npu_cfg_mem[1] <= npu_cfg_mem[1];
@@ -208,7 +210,7 @@ module SEU_npu_CCReg
     end
 
    assign nn_wt_saddr         = npu_cfg_mem[0][31:0];
-   assign nn_first_map_saddr  = {npu_cfg_mem[0][55:32],8{1'b0}};
+   assign nn_img_saddr  = {npu_cfg_mem[0][55:32],{8{1'b0}}};
    assign nn_map1_saddr       = npu_cfg_mem[2][63:32];
    assign nn_map0_saddr       = npu_cfg_mem[2][31:0];
    assign nn_layers_num       = npu_cfg_mem[0][63:56];
@@ -225,17 +227,17 @@ module SEU_npu_CCReg
         reg_rdata <= {`CCR_DW{1'b0}};
         
         case (1'b1) 
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_EN_OS   >> 3))  : reg_rdata[`NPU_EN_WIDTH-1:0]   = npu_en;
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_STAT_OS >> 3))  : reg_rdata[`NPU_STAT_WIDTH-1:0] = npu_stat;
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CTRL_OS >> 3))  : reg_rdata[`NPU_CTRL_WIDTH-1:0] = npu_ctrl;
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_0_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[0];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_1_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[1];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_2_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[2];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_3_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[3];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_4_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[4];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_5_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[5];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_6_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[6];
-            (reg_addr[`CCR_OS_AW-1:3] == (NPU_CFG_7_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[7];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_EN_OS   >> 3))  : reg_rdata[`NPU_EN_WIDTH-1:0]   = npu_en;
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_STAT_OS >> 3))  : reg_rdata[`NPU_STAT_WIDTH-1:0] = npu_stat;
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CTRL_OS >> 3))  : reg_rdata[`NPU_CTRL_WIDTH-1:0] = npu_ctrl;
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_0_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[0];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_1_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[1];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_2_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[2];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_3_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[3];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_4_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[4];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_5_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[5];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_6_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[6];
+            (reg_addr[`CCR_OS_AW-1:3] == (`NPU_CFG_7_OS >> 3)) : reg_rdata[`NPU_CFG_WIDTH-1:0]  = npu_cfg_mem[7];
         endcase
     
     end
